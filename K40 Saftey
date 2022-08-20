@@ -1,0 +1,178 @@
+#include <LiquidCrystal_I2C.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+LiquidCrystal_I2C lcd(0x27, 20, 4);  // Set the LCD I2C address
+
+// Data wire is plugged into port 3 on the Arduino
+#define ONE_WIRE_BUS 3
+#define TEMPERATURE_PRECISION 9
+// Setup a oneWire instance to communicate with any OneWire devices (not just Maxim/Dallas temperature ICs)
+OneWire oneWire(ONE_WIRE_BUS);
+
+// Pass our oneWire reference to Dallas Temperature.
+DallasTemperature sensors(&oneWire);
+
+// arrays to hold device addresses
+DeviceAddress insideThermometer, outsideThermometer;
+
+// Assign address manually. The addresses below will need to be changed
+// to valid device addresses on your bus. Device address can be retrieved
+// by using either oneWire.search(deviceAddress) or individually via
+// sensors.getAddress(deviceAddress, index)
+// DeviceAddress insideThermometer = { 0x28, 0x1D, 0x39, 0x31, 0x2, 0x0, 0x0, 0xF0 };
+// DeviceAddress outsideThermometer   = { 0x28, 0x3F, 0x1C, 0x31, 0x2, 0x0, 0x0, 0x2 };
+
+
+int flowPin = 2;     //This is the input pin on the Arduino
+double flowRate;     //This is the value we intend to calculate.
+volatile int count;  //This integer needs to be set as volatile to ensure it updates correctly during the interrupt process.
+
+void setup() {
+  // Initiate the LCD:
+  lcd.init();
+  lcd.backlight();
+  Serial.end();
+  lcd.setCursor(1, 1);
+  lcd.print("MCE K40 Laser");  // You can change this start up text to whatever you want, it appears on the display when you turn on the system
+  lcd.setCursor(1, 2);
+  lcd.print("Cooling Guard");  // You can change this start up text to whatever you want, it appears on the display when you turn on the system
+  delay(3000);
+  for (int scrollCounter = 0; scrollCounter < 16; scrollCounter++) {
+    lcd.scrollDisplayLeft();
+    delay(50);
+  }
+  // put your setup code here, to run once:
+  pinMode(flowPin, INPUT);           //Sets the pin as an input
+  attachInterrupt(0, Flow, RISING);  //Configures interrupt 0 (pin 2 on the Arduino Uno) to run the function "Flow"
+  Serial.begin(9600);                //Start Serial
+
+
+
+  // Search for devices on the bus and assign based on an index. Ideally,
+  // you would do this to initially discover addresses on the bus and then
+  // use those addresses and manually assign them (see above) once you know
+  // the devices on your bus (and assuming they don't change).
+  //
+  // method 1: by index
+  if (!sensors.getAddress(insideThermometer, 0)) Serial.println("Unable to find address for Device 0");
+  if (!sensors.getAddress(outsideThermometer, 1)) Serial.println("Unable to find address for Device 1");
+
+  // show the addresses we found on the bus
+  Serial.print("Device 0 Address: ");
+  printAddress(insideThermometer);
+  Serial.println();
+
+  Serial.print("Device 1 Address: ");
+  printAddress(outsideThermometer);
+  Serial.println();
+
+  // set the resolution to 9 bit per device
+  sensors.setResolution(insideThermometer, TEMPERATURE_PRECISION);
+  sensors.setResolution(outsideThermometer, TEMPERATURE_PRECISION);
+
+  Serial.print("Device 0 Resolution: ");
+  Serial.print(sensors.getResolution(insideThermometer), DEC);
+  Serial.println();
+
+  Serial.print("Device 1 Resolution: ");
+  Serial.print(sensors.getResolution(outsideThermometer), DEC);
+  Serial.println();
+}
+
+// function to print a device address
+void printAddress(DeviceAddress deviceAddress) {
+  for (uint8_t i = 0; i < 8; i++) {
+    // zero pad the address if necessary
+    if (deviceAddress[i] < 16) Serial.print("0");
+    Serial.print(deviceAddress[i], HEX);
+  }
+}
+
+// function to print the temperature for a device
+void printTemperature(DeviceAddress deviceAddress) {
+  float tempC = sensors.getTempC(deviceAddress);
+  if (tempC == DEVICE_DISCONNECTED_C) {
+    Serial.println("Error: Could not read temperature data");
+    return;
+  }
+  Serial.print("Temp C: ");
+  Serial.print(tempC);
+  //Serial.print(DallasTemperature::toFahrenheit(tempC));
+}
+
+// function to print a device's resolution
+void printResolution(DeviceAddress deviceAddress) {
+  Serial.print("Resolution: ");
+  Serial.print(sensors.getResolution(deviceAddress));
+  Serial.println();
+}
+
+// main function to print information about a device
+void printData(DeviceAddress deviceAddress) {
+  // Serial.print("Device Address: ");
+  // printAddress(deviceAddress);
+  // Serial.print(" ");
+  printTemperature(deviceAddress);
+  Serial.println();
+}
+
+void loop() {
+
+  lcd.init();
+  lcd.backlight();
+  // put your main code here, to run repeatedly:
+  // call sensors.requestTemperatures() to issue a global temperature
+  // request to all devices on the bus
+  Serial.print("Requesting temperatures...");
+  sensors.requestTemperatures();
+  Serial.println("DONE");
+
+  // print the device information
+  Serial.print("Inside Tank: ");
+  printData(insideThermometer);
+  Serial.print("From Tube: ");
+  printData(outsideThermometer);
+  flowRate = 0;
+
+  count = 0;       // Reset the counter so we start counting from 0 again
+  interrupts();    //Enables interrupts on the Arduino
+  delay(1000);     //Wait 1 second
+  noInterrupts();  //Disable the interrupts on the Arduino
+
+  //Start the math
+  flowRate = (count * 2.25);            //Take counted pulses in the last second and multiply by 2.25mL
+  flowRate = flowRate * 60;             //Convert seconds to minutes, giving you mL / Minute
+  flowRate = ((flowRate / 1000) * 60);  //Convert mL to Liters, giving you Liters / Minute
+
+  //Serial.println(flowRate);         //Print the variable flowRate to Serial
+  // Serial.println("got here");
+
+  // Display temperature from each sensor
+  // Serial.print("start display");
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Tank:");
+  lcd.setCursor(6, 0);
+  printData(insideThermometer);
+  //tempC = sensors.getTempCByIndex(0);
+  lcd.print((char)176);  //shows degrees character
+  lcd.print("From Tube:");
+  lcd.setCursor(11, 2);
+  printData(outsideThermometer);
+  lcd.print((char)176);  //shows degrees character
+  lcd.setCursor(0, 3);
+  lcd.print("Flow:");
+  lcd.setCursor(6, 3);
+  lcd.print(flowRate);
+  lcd.setCursor(11, 1);
+  lcd.print("L/Min");
+  //  else {
+  //     digitalWrite(Relais, HIGH);
+  //  lcd.clear();
+  //  lcd.setCursor(3, 0);
+  //  lcd.print("PUMP ERROR");
+  //
+}
+void Flow() {
+  count++;  //Every time this function is called, increment "count" by 1
+}
